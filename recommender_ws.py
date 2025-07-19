@@ -123,14 +123,12 @@ def _collect_candidates(strict, prob_map):
             # 거래량 필터
             if strict is True and (vols[-1] < vols[-15:].mean()):
                 continue
-            # 지표 계산
             rsi   = compute_rsi(closes)
             macd  = compute_macd_hist(closes)
             mom   = compute_momentum(price_history[code])
             score = (100 - rsi)*0.5 + max(macd,0)*0.2 \
                   + (vols[-1]/vols[-15:].mean()*100)*0.1 + max(mom,0)*0.2
-            bucket = int(score//10)*10
-            prob   = prob_map.get(bucket,0.6)
+            bucket = int(score//10)*10; prob = prob_map.get(bucket,0.6)
             candidates.append((code, price, score, rsi, macd, vols[-1], mom, prob))
         except:
             continue
@@ -156,9 +154,9 @@ def recommend(prob_map, top_n=5):
     for i,(c,p,sc,_,_,_,_,pr) in enumerate(best,1):
         # 가격 소수점2자리, 천 단위 콤마
         print(f"{i}. {c} | 가격:{p:,.2f} | 확률:{pr*100:.1f}% | 점수:{sc:.1f}")
-        # 텔레그램 알림: 점수 ≥ 85
-        if sc >= 85:
-            send_telegram(f"🔔 점수 85 이상 종목\n{i}. {c} | 가격:{p:,.2f} | 확률:{pr*100:.1f}% | 점수:{sc:.1f}")
+        # 텔레그램 알림: 점수 ≥ 80 AND 확률 ≥ 70%
+        if sc >= 80 and pr*100 >= 70:
+            send_telegram(f"🔔 우수 종목 알림\n{i}. {c} | 가격:{p:,.2f} | 확률:{pr*100:.1f}% | 점수:{sc:.1f}")
     print("-"*70)
 
 # ─── 8) 실행 진입점 ────────────────────────────────────────────────
