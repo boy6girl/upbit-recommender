@@ -9,10 +9,12 @@ import pyupbit
 import websocket
 from dotenv import load_dotenv
 
-# ─── 0) 환경 변수 로드 ─────────────────────────────────────────────
+# ─── 0) 환경 변수 & 목표 퍼센트 ───────────────────────────────────────
 load_dotenv()
-TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID  = os.getenv("CHAT_ID")
+TG_TOKEN       = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID        = os.getenv("CHAT_ID")
+TAKE_PROFIT_PCT = 1.0   # 익절 목표: +1.0%
+STOP_LOSS_PCT   = 0.5   # 손절 한계: -0.5%
 
 def send_telegram(message: str):
     """텔레그램으로 메시지 전송"""
@@ -23,7 +25,7 @@ def send_telegram(message: str):
     except Exception as e:
         print("텔레그램 전송 실패:", e)
 
-# ─── 1) 설정 ─────────────────────────────────────────────────────────
+# ─── 1) 기본 설정 ────────────────────────────────────────────────────
 CANDIDATES    = pyupbit.get_tickers(fiat="KRW")[:30]
 latest_prices = {}
 price_history = defaultdict(lambda: deque(maxlen=12))
@@ -42,7 +44,7 @@ def seed_initial_prices():
         except:
             continue
 
-# ─── 3) 백테스트: score→확률 맵 생성 ─────────────────────────────────
+# ─── 3) 백테스트: 점수→확률 맵 생성 ────────────────────────────────────
 def compute_rsi(closes, period=14):
     s     = pd.Series(closes)
     delta = s.diff().dropna()
@@ -74,7 +76,7 @@ def backtest_probabilities(codes, samples=100):
     prob = df.groupby("bucket")["hit"].mean().to_dict()
     return {b:prob.get(b,0.0) for b in range(0,101,10)}
 
-# ─── 4) WebSocket 수집 ─────────────────────────────────────────────
+# ─── 4) WebSocket 실시간 수집 ─────────────────────────────────────────
 def on_message(ws, msg):
     data  = json.loads(msg)
     code  = data.get("code")
@@ -94,7 +96,7 @@ def start_ws():
     )
     ws.run_forever()
 
-# ─── 5) 지표 계산 ────────────────────────────────────────────────────
+# ─── 5) 지표 계산 ─────────────────────────────────────────────────────
 def compute_macd_hist(closes):
     s      = pd.Series(closes)
     macd   = s.ewm(span=12, adjust=False).mean() - s.ewm(span=26, adjust=False).mean()
@@ -107,7 +109,7 @@ def compute_momentum(hist_q):
     p0 = hist_q[0][1]; p1 = hist_q[-1][1]
     return ((p1 - p0) / p0) * 100
 
-# ─── 6) 후보 수집 헬퍼 ─────────────────────────────────────────────
+# ─── 6) 후보 수집 헬퍼 ─────────────────────────────────────────────────
 def _collect_candidates(strict, prob_map):
     now        = datetime.now()
     candidates = []
@@ -116,59 +118,67 @@ def _collect_candidates(strict, prob_map):
             df = pyupbit.get_ohlcv(code, "minute5", count=15)
             if df is None or df.empty:
                 continue
-            # 신규 상장 필터
+            # 신규 상장 7일 이하 제외
             if strict is True and (now - df.index[0].to_pydatetime() < timedelta(days=7)):
                 continue
             closes = df['close'].values; vols = df['volume'].values
             # 거래량 필터
             if strict is True and (vols[-1] < vols[-15:].mean()):
                 continue
+            # 지표 계산
             rsi   = compute_rsi(closes)
             macd  = compute_macd_hist(closes)
             mom   = compute_momentum(price_history[code])
             score = (100 - rsi)*0.5 + max(macd,0)*0.2 \
                   + (vols[-1]/vols[-15:].mean()*100)*0.1 + max(mom,0)*0.2
-            bucket = int(score//10)*10; prob = prob_map.get(bucket,0.6)
+            bucket = int(score//10)*10
+            prob   = prob_map.get(bucket,0.6)
             candidates.append((code, price, score, rsi, macd, vols[-1], mom, prob))
         except:
             continue
     return candidates
 
-# ─── 7) 추천 로직 ──────────────────────────────────────────────────
+# ─── 7) 추천 & 알림 로직 ─────────────────────────────────────────────
 def recommend(prob_map, top_n=5):
     print(f"[DEBUG] 수집 종목 수: {len(latest_prices)}")
-    # 1차: strict=True
+    # 1차: 신규상장+거래량 필터
     cands = _collect_candidates(True, prob_map)
-    # 2차: strict=False
+    # 2차: 거래량만 해제
     if not cands:
         print("[WARN] 거래량 필터 완화")
         cands = _collect_candidates(False, prob_map)
-    # 3차: strict=None
+    # 3차: 모든 필터 해제
     if not cands:
         print("[WARN] 모든 필터 해제")
         cands = _collect_candidates(None, prob_map)
 
     best = sorted(cands, key=lambda x:x[2], reverse=True)[:top_n]
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(now, "Top5 추천:")
     for i,(c,p,sc,_,_,_,_,pr) in enumerate(best,1):
-        # 가격 소수점2자리, 천 단위 콤마
-        print(f"{i}. {c} | 가격:{p:,.2f} | 확률:{pr*100:.1f}% | 점수:{sc:.1f}")
-        # 텔레그램 알림: 점수 ≥ 80 AND 확률 ≥ 70%
+        # TP/SL 목표가 계산
+        tp = p * (1 + TAKE_PROFIT_PCT/100)
+        sl = p * (1 - STOP_LOSS_PCT/100)
+        line = (f"{i}. {c} | 가격:{p:,.2f} | 확률:{pr*100:.1f}% | 점수:{sc:.1f} "
+                f"| TP:{tp:,.2f} | SL:{sl:,.2f}")
+        print(line)
+        # 알림 조건: 점수≥80 AND 확률≥70%
         if sc >= 80 and pr*100 >= 70:
-            send_telegram(f"🔔 우수 종목 알림\n{i}. {c} | 가격:{p:,.2f} | 확률:{pr*100:.1f}% | 점수:{sc:.1f}")
+            send_telegram("🔔 우수 종목 알림\n" + line)
     print("-"*70)
 
-# ─── 8) 실행 진입점 ────────────────────────────────────────────────
+# ─── 8) 실행 진입점 ─────────────────────────────────────────────────
 if __name__ == "__main__":
     seed_initial_prices()
     print("백테스트 중…(약 1~2분 소요)")
     prob_map = backtest_probabilities(CANDIDATES, samples=100)
     print("확률 맵:", prob_map)
+    # WebSocket 백그라운드 시작
     import threading
     t = threading.Thread(target=start_ws, daemon=True)
     t.start()
     time.sleep(30)
+    # 무한루프: 5분마다 추천
     while True:
         recommend(prob_map, top_n=5)
         time.sleep(300)
