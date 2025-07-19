@@ -1,6 +1,0 @@
-pyupbit
-websocket-client
-python-dotenv
-pandas
-numpy
-requests
