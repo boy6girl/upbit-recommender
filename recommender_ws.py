@@ -13,14 +13,14 @@ import pyupbit
 import websocket
 from dotenv import load_dotenv
 
-# ─── 설정 ─────────────────────────────────────────────────────────────
+# ─── 설정 ─────────────────────────────────────────────
 load_dotenv()
-TG_TOKEN        = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID         = os.getenv("CHAT_ID")
-TAKE_PROFIT_PCT = 1.0    # 익절 목표 +1%
-STOP_LOSS_PCT   = 0.5    # 손절 한계 -0.5%
+TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+TAKE_PROFIT_PCT = 1.0  # 익절 목표 +1%
+STOP_LOSS_PCT = 0.5    # 손절 한계 -0.5%
 
-# ─── 헬퍼 함수 ────────────────────────────────────────────────────────
+# ─── 텔레그램 전송 ──────────────────────────────────
 def send_telegram(msg: str):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     try:
@@ -28,6 +28,7 @@ def send_telegram(msg: str):
     except:
         pass
 
+# ─── 기술 지표 계산 ─────────────────────────────────
 def compute_rsi(arr, period=14):
     s = pd.Series(arr, dtype=float)
     delta = s.diff().dropna()
@@ -47,7 +48,7 @@ def compute_vwap(df):
     vol_sum = df['volume'].sum()
     return float((df['close'] * df['volume']).sum() / vol_sum) if vol_sum > 0 else 0
 
-# ─── 가격 수집 ───────────────────────────────────────────────────────
+# ─── 가격 수집 ─────────────────────────────────────
 CANDIDATES = pyupbit.get_tickers(fiat="KRW")[:30]
 latest_prices = {}
 price_history = defaultdict(lambda: deque(maxlen=12))
@@ -85,7 +86,7 @@ def start_ws():
     )
     ws.run_forever()
 
-# ─── 점수 & 확률 계산 ────────────────────────────────────────────────
+# ─── 점수/확률 계산 ────────────────────────────────
 def backtest_probabilities(codes, samples=100, period=14):
     results = []
     for code in codes:
@@ -106,6 +107,7 @@ def backtest_probabilities(codes, samples=100, period=14):
     prob = df.groupby("bucket")["hit"].mean().to_dict()
     return {b: prob.get(b, 0.0) for b in range(0, 101, 10)}
 
+# ─── 추천 로직 ─────────────────────────────────────
 def recommend(prob_map, top_n=3):
     scored = []
     for code, price in latest_prices.items():
@@ -137,21 +139,21 @@ def recommend(prob_map, top_n=3):
             send_telegram(result)
             break
 
-# ─── 메인 실행 ───────────────────────────────────────────────────────
+# ─── 메인 실행 ─────────────────────────────────────
 if __name__ == "__main__":
     seed_initial_prices()
     prob_map = backtest_probabilities(CANDIDATES)
     threading.Thread(target=start_ws, daemon=True).start()
     time.sleep(30)
 
-    START_TIME = datetime.now()  # ⏱️ 시작 시간 저장
+    START_TIME = datetime.now()
 
     while True:
         recommend(prob_map, top_n=3)
 
-        # ⏰ 6시간 지나면 종료
-        if datetime.now() - START_TIME > timedelta(hours=6):
-            print("✅ 6시간 경과. 자동 종료합니다.")
+        # ✅ 1시간 후 종료
+        if datetime.now() - START_TIME > timedelta(hours=1):
+            print("⏹️ 1시간 경과. 자동 종료합니다.")
             break
 
-        time.sleep(60)  # 1분 주기 실행
+        time.sleep(60)
