@@ -1,22 +1,17 @@
-name: Upbit Recommender Schedule
+name: Upbit Recommender Daily Run
 
 on:
   schedule:
-    # 한국 시간 기준 오전 9시 (UTC 0시)
-    - cron: '0 0 * * *'
-    # 한국 시간 기준 오후 3시 (UTC 6시)
-    - cron: '0 6 * * *'
-    # 한국 시간 기준 오후 9시 (UTC 12시)
+    # 매일 한국시간 오후 9시 (KST 21:00 → UTC 12:00)
     - cron: '0 12 * * *'
-    # 한국 시간 기준 새벽 3시 (UTC 18시)
-    - cron: '0 18 * * *'
-  workflow_dispatch:  # 수동 실행도 허용
+  workflow_dispatch:  # 수동 실행 허용
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -28,6 +23,6 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run recommender
+      - name: Run recommender script
         run: |
           python recommender_ws.py
