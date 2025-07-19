@@ -11,8 +11,8 @@ from dotenv import load_dotenv
 
 # ─── 0) 환경 변수 & 목표 퍼센트 ───────────────────────────────────────
 load_dotenv()
-TG_TOKEN       = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID        = os.getenv("CHAT_ID")
+TG_TOKEN        = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID         = os.getenv("CHAT_ID")
 TAKE_PROFIT_PCT = 1.0   # 익절 목표: +1.0%
 STOP_LOSS_PCT   = 0.5   # 손절 한계: -0.5%
 
@@ -156,15 +156,13 @@ def recommend(prob_map, top_n=5):
     now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(now, "Top5 추천:")
     for i,(c,p,sc,_,_,_,_,pr) in enumerate(best,1):
-        # TP/SL 목표가 계산
         tp = p * (1 + TAKE_PROFIT_PCT/100)
         sl = p * (1 - STOP_LOSS_PCT/100)
         line = (f"{i}. {c} | 가격:{p:,.2f} | 확률:{pr*100:.1f}% | 점수:{sc:.1f} "
-                f"| TP:{tp:,.2f} | SL:{sl:,.2f}")
+                f"| 익절:{tp:,.2f} | 손절:{sl:,.2f}")
         print(line)
-        # 알림 조건: 점수≥80 AND 확률≥70%
-        if sc >= 80 and pr*100 >= 70:
-            send_telegram("🔔 우수 종목 알림\n" + line)
+        if (sc >= 80 and pr*100 >= 70) or sc >= 90 or pr*100 >= 90:
+            send_telegram("🔔 알림\n" + line)
     print("-"*70)
 
 # ─── 8) 실행 진입점 ─────────────────────────────────────────────────
@@ -173,12 +171,10 @@ if __name__ == "__main__":
     print("백테스트 중…(약 1~2분 소요)")
     prob_map = backtest_probabilities(CANDIDATES, samples=100)
     print("확률 맵:", prob_map)
-    # WebSocket 백그라운드 시작
     import threading
     t = threading.Thread(target=start_ws, daemon=True)
     t.start()
     time.sleep(30)
-    # 무한루프: 5분마다 추천
     while True:
         recommend(prob_map, top_n=5)
         time.sleep(300)
